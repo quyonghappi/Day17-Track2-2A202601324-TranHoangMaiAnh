@@ -63,27 +63,37 @@ def main() -> int:
     n_src = len(list(SRC.glob("*.parquet")))
     print(f"  nguồn : {SRC}  ({n_src:,} file)")
 
-    # TODO(nhiệm vụ 4): hiện thực khung COPY ... TO ... ở phần docstring.
-    #
-    #   con.execute(f"""
-    #       copy (
-    #           select * from read_parquet('{SRC}/*.parquet')
-    #           order by ...
-    #       ) to '{DST}' (
-    #           format parquet,
-    #           partition_by (...),
-    #           overwrite_or_ignore,
-    #           row_group_size ...
-    #       )
-    #   """)
-    #
-    # Sau đó kiểm tra không mất hàng nào:
-    #
-    #   assert <số row dataset cũ> == <số row dataset mới>
+    if not n_src:
+        raise SystemExit(f"Không có file nguồn tại {SRC}")
 
-    print("\n  tools/compact.py chưa được hiện thực — đây là nhiệm vụ 4.")
-    print("  Mở file này, đọc phần KHUNG THỰC HIỆN ở đầu file và điền vào TODO.")
-    print("  Hướng dẫn từng bước: GUIDE.md mục 4.\n")
+    # Partition ngày khớp predicate dashboard
+    # trong mỗi partition, các hàng của một customer nằm cạnh nhau để min/max row-group hỗ trợ lọc tiếp
+    # 2,048 hàng nhỏ hơn lượng dữ liệu xấp xỉ một ngày, nên một row group
+    # không phủ toàn bộ customer của ngày đó.
+    con.execute(f"""
+        copy (
+            select *
+            from read_parquet('{SRC}/*.parquet')
+            order by event_date, customer_name
+        ) to '{DST}' (
+            format parquet,
+            partition_by (event_date),
+            overwrite_or_ignore,
+            row_group_size 2048
+        )
+    """)
+
+    n_old = con.execute(
+        f"select count(*) from read_parquet('{SRC}/*.parquet')"
+    ).fetchone()[0]
+    n_new = con.execute(
+        f"select count(*) from read_parquet('{DST}/**/*.parquet', hive_partitioning = true)"
+    ).fetchone()[0]
+    assert n_old == n_new, f"Mất hàng khi compact: {n_old} != {n_new}"
+    con.close()
+
+    n_dst = len(list(DST.glob("**/*.parquet")))
+    print(f"  đích  : {DST}  ({n_dst:,} file, {n_new:,} hàng)\n")
     return 0
 
 
